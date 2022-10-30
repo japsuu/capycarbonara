@@ -59,7 +59,9 @@ public class CalculatorService
 
         //return Math.Round(absolutePercentage);
     }
+
     
+
     public class Anomaly
     {
         public enum Type
@@ -67,7 +69,6 @@ public class CalculatorService
             Spike,
             Drop
         }
-
         public Type AnomalyType;
 
         public int ItemID;

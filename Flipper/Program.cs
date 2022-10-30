@@ -6,12 +6,16 @@ namespace Flipper;
 
 internal class Program
 {
+    public static int ApiQueryInterval = API_UPDATE_SYNCHRONIZATION_INTERVAL;
+    
+    private const int API_UPDATE_SYNCHRONIZATION_INTERVAL = 2;
     private const string BOT_TOKEN = "MTAzMzQyODE2MDQ1MDE1NDUzNg.Gkl11H.vivlOYY1-aJcaT4LCRuYy9Y7yg1OB-rIev5_2Q";
     private DiscordSocketClient client;
-    private HttpClient httpClient;
     private DataFetchService dataFetchService;
     private DataParserService dataParserService;
     private CalculatorService calculatorService;
+    
+    private static bool syncedWithApiUpdateCycle;
     
     public static Task Main(string[] args) => new Program().MainAsync();
 
@@ -27,11 +31,9 @@ internal class Program
         client.LatencyUpdated += ClientOnLatencyUpdated;
         client.Connected += ClientOnConnected;
 
-        httpClient = new HttpClient();
-        httpClient.DefaultRequestHeaders.Add("User-Agent", "Japsu#8887");
-        dataFetchService = new DataFetchService(httpClient);
-        dataParserService = new DataParserService();
-        calculatorService = new CalculatorService();
+        //dataFetchService = new DataFetchService(httpClient);
+        //dataParserService = new DataParserService();
+        //calculatorService = new CalculatorService();
 
         await client.LoginAsync(TokenType.Bot, BOT_TOKEN);
 
@@ -41,24 +43,58 @@ internal class Program
         await Task.Delay(-1);
     }
 
-    private Task ClientOnConnected()
+    private async Task ClientOnConnected()
     {
-        Task task = CalculateAnomalies();
-        Task result = task.WaitAsync(CancellationToken.None);
-        return result;
-    }
+        bool testsSuccessful = await Flipper.Test();
 
-    private async Task CalculateAnomalies()
-    {
-        //TODO: ________________________________ Move to timed function _______________________________
-        DataFetchService.DataResponse data = await dataFetchService.FetchData();
-        DataParserService.TimeSeriesPair seriesPair = await dataParserService.ParseDataResponse(data);
-        List<CalculatorService.Anomaly> anomalies = calculatorService.GetAnomalies(seriesPair);
-        foreach (CalculatorService.Anomaly anomaly in anomalies)
+        if (!testsSuccessful)
         {
-            Console.WriteLine($"{anomaly.AnomalyType}: {anomaly.ItemID}");
+            Logger.Error("Tests were not successful. Program execution will not continue.");
+            return;
+        }
+        
+        await Flipper.Initialize();
+        
+        PeriodicTimer timer = new(TimeSpan.FromSeconds(API_UPDATE_SYNCHRONIZATION_INTERVAL));
+
+        while (await timer.WaitForNextTickAsync())
+        {
+            // When we are synced with the api, we can safely set the query interval to 60s for minimum delay.
+            bool wasDataUpdated = await Flipper.Update();
+
+            if (!wasDataUpdated)
+                syncedWithApiUpdateCycle = false;
+            
+            if (syncedWithApiUpdateCycle) continue;
+            
+            if (wasDataUpdated)
+            {
+                timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+
+                syncedWithApiUpdateCycle = true;
+                
+                Logger.Success("Successfully synced with API update cycle!");
+            }
+            else
+            {
+                timer = new PeriodicTimer(TimeSpan.FromSeconds(API_UPDATE_SYNCHRONIZATION_INTERVAL));
+                
+                Logger.Warn("Not in sync with API update cycle! Fixing...");
+            }
         }
     }
+
+    // private async Task CalculateAnomalies()
+    // {
+    //     //TODO: ________________________________ Move to timed function _______________________________
+    //     DataFetchService.DataResponse data = await dataFetchService.FetchData();
+    //     DataParserService.TimeSeriesPair seriesPair = await dataParserService.ParseDataResponse(data);
+    //     List<CalculatorService.Anomaly> anomalies = calculatorService.GetAnomalies(seriesPair);
+    //     foreach (CalculatorService.Anomaly anomaly in anomalies)
+    //     {
+    //         Console.WriteLine($"{anomaly.AnomalyType}: {anomaly.ItemID}");
+    //     }
+    // }
 
     private Task ClientOnLatencyUpdated(int oldLatency, int newLatency)
     {
@@ -70,7 +106,7 @@ internal class Program
 
     private static Task Log(LogMessage msg)
     {
-        Console.WriteLine(msg.ToString());
+        Logger.DiscordOutput(msg.ToString());
         
         return Task.CompletedTask;
     }
