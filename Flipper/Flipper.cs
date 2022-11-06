@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+﻿/*using Newtonsoft.Json;
 #pragma warning disable CS8618
 
 namespace Flipper;
@@ -6,9 +6,8 @@ namespace Flipper;
 public static class Flipper
 {
     private const string RUNELITE_API_ADDRESS_LATEST = "https://prices.runescape.wiki/api/v1/osrs/latest";
+    private const string RUNELITE_API_ADDRESS_1_HOUR = "https://prices.runescape.wiki/api/v1/osrs/1h";
     private const string RUNELITE_API_ADDRESS_MAPPING = "https://prices.runescape.wiki/api/v1/osrs/mapping";
-    private const int AVERAGE_ITEM_PRICES_MAX_LENGTH = 4;
-    private const int ANOMALY_DEVIATION_PERCENTAGE_MIN = 20;
 
     private static HttpClient httpClient = null!;
 
@@ -16,6 +15,26 @@ public static class Flipper
 
     private static bool isInitialized;
     private static bool hasUpdatedData;
+    
+    private static int updatedItemsCount;
+
+    private static async Task<List<ItemData>?> GetItemMapping()
+    {
+        string json = await QueryApiToJson(RUNELITE_API_ADDRESS_MAPPING);
+        return JsonConvert.DeserializeObject<List<ItemData>>(json);
+    }
+
+    private static async Task<PriceMapping?> GetPrices_Latest()
+    {
+        string json = await QueryApiToJson(RUNELITE_API_ADDRESS_LATEST);
+        return JsonConvert.DeserializeObject<PriceMapping>(json);
+    }
+
+    private static async Task<PriceMapping1H?> GetPrices_1h()
+    {
+        string json = await QueryApiToJson(RUNELITE_API_ADDRESS_1_HOUR);
+        return JsonConvert.DeserializeObject<PriceMapping1H>(json);
+    }
 
     public static async Task<bool> Test()
     {
@@ -23,26 +42,30 @@ public static class Flipper
 
         CreateHttpClient();
         
-        string tMappingJson = await QueryApiToJson(RUNELITE_API_ADDRESS_MAPPING);
-        List<ItemData>? tItemMapping = JsonConvert.DeserializeObject<List<ItemData>>(tMappingJson);
-        
-        string tLatestPricesJson = await QueryApiToJson(RUNELITE_API_ADDRESS_LATEST);
-        PriceMapping? tPriceMapping = JsonConvert.DeserializeObject<PriceMapping>(tLatestPricesJson);
+        List<ItemData>? itemMapping = await GetItemMapping();
+        PriceMapping? priceMappingLatest = await GetPrices_Latest();
+        PriceMapping1H? priceMapping1H = await GetPrices_1h();
 
-        if (tItemMapping == null)
+        if (itemMapping == null)
         {
             Logger.TestError("Get item mapping.");
             return false;
         }
+        Logger.TestOk("Get item mapping.");
 
-        if (tPriceMapping == null)
+        if (priceMappingLatest == null)
         {
-            Logger.TestError("Get price mapping.");
+            Logger.TestError("Get latest price mapping.");
             return false;
         }
-        
-        Logger.TestOk("Get item mapping.");
-        Logger.TestOk("Get price mapping.");
+        Logger.TestOk("Get latest price mapping.");
+
+        if (priceMapping1H == null)
+        {
+            Logger.TestError("Get 1h price mapping.");
+            return false;
+        }
+        Logger.TestOk("Get 1h price mapping.");
         
         Logger.Info("Tests completed!");
 
@@ -56,22 +79,35 @@ public static class Flipper
     }
 
     /// <summary>
-    /// Refreshes the latest prices, and finds potential flips.
+    /// Refreshes the latest prices.
     /// </summary>
-    public static async Task<bool> Update()
+    public static async Task<bool> RefreshData()
     {
         if (!isInitialized)
         {
             Logger.Warn("Tried to Update before Initialization!");
-            return false;
+            await Initialize();
         }
-        Logger.Info("Flipper refreshing...");
+        //Logger.Info("Flipper refreshing...");
         
         await QueryLatestPrices();
-        FindFlips();
         
-        Logger.Info("Flipper refresh complete.");
+        //Logger.Info("Flipper refresh complete.");
         return hasUpdatedData;
+    }
+    
+    /// <summary>
+    /// Calculates flips.
+    /// </summary>
+    /// <returns>Flips/anomalies.</returns>
+    public static async Task<List<Item>> GetFlips()
+    {
+        if (isInitialized) return FindFlips();
+        
+        Logger.Warn("Tried to Update before Initialization!");
+        await Initialize();
+
+        return FindFlips();
     }
 
     public static async Task Initialize()
@@ -82,11 +118,9 @@ public static class Flipper
         
         CreateHttpClient();
 
-        string mappingJson = await QueryApiToJson(RUNELITE_API_ADDRESS_MAPPING);
-        List<ItemData>? itemMapping = JsonConvert.DeserializeObject<List<ItemData>>(mappingJson);
-        
-        string latestPricesJson = await QueryApiToJson(RUNELITE_API_ADDRESS_LATEST);
-        PriceMapping? priceMapping = JsonConvert.DeserializeObject<PriceMapping>(latestPricesJson);
+        List<ItemData>? itemMapping = await GetItemMapping();
+        PriceMapping? priceMappingLatest = await GetPrices_Latest();
+        PriceMapping1H? priceMapping1H = await GetPrices_1h();
 
         if (itemMapping == null)
         {
@@ -94,22 +128,31 @@ public static class Flipper
             return;
         }
 
-        if (priceMapping == null)
+        if (priceMappingLatest == null)
         {
             Logger.Warn("Could not get the latest price mapping.");
             return;
         }
 
+        if (priceMapping1H == null)
+        {
+            Logger.Warn("Could not get the 1h price mapping.");
+            return;
+        }
+
         foreach (ItemData itemData in itemMapping)
         {
-            if (!priceMapping.Prices.TryGetValue(itemData.Id.ToString(), out JsonPriceObject? parsedPrices)) continue;
+            if (!priceMappingLatest.Prices.TryGetValue(itemData.Id.ToString(), out JsonPriceObject? parsedPricesLatest)) continue;
+            if (!priceMapping1H.Prices.TryGetValue(itemData.Id.ToString(), out JsonPriceObject1H? parsedPrices1H)) continue;
 
-            PriceObject? prices = parsedPrices?.ToPriceObject();
-            if(prices == null) continue;
+            PriceObject? pricesLatest = parsedPricesLatest?.ToPriceObject();
+            if(pricesLatest == null) continue;
+            PriceObject1H? prices1H = parsedPrices1H.ToPriceObject(priceMapping1H.Timestamp);
+            if(prices1H == null) continue;
             
-            Item item = new(itemData, prices);
+            Item item = new(itemData, pricesLatest, prices1H);
             
-            if(!item.IsFlippable()) continue;
+            //if(!item.IsFlippable()) continue;
             
             flippableItems.Add(item);
         }
@@ -121,44 +164,56 @@ public static class Flipper
     private static async Task QueryLatestPrices()
     {
         hasUpdatedData = false;
-        string latestPricesJson = await QueryApiToJson(RUNELITE_API_ADDRESS_LATEST);
-        PriceMapping? priceMapping = JsonConvert.DeserializeObject<PriceMapping>(latestPricesJson);
+        PriceMapping? priceMappingLatest = await GetPrices_Latest();
+        PriceMapping1H? priceMapping1H = await GetPrices_1h();
         
-        if (priceMapping == null)
+        if (priceMappingLatest == null)
         {
             Logger.Warn("Could not get the latest price mapping.");
             return;
         }
+        
+        if (priceMapping1H == null)
+        {
+            Logger.Warn("Could not get the 1h price mapping.");
+            return;
+        }
 
-        int updatedItemsCount = 0;
+        updatedItemsCount = 0;
 
         foreach (Item item in flippableItems)
         {
-            if (!priceMapping.Prices.TryGetValue(item.ID.ToString(), out JsonPriceObject? parsedPrices)) continue;
-            
-            //TODO: Confirm that the data isn't too old!
+            if (!priceMappingLatest.Prices.TryGetValue(item.ID.ToString(), out JsonPriceObject? parsedPricesLatest)) continue;
+            if (!priceMapping1H.Prices.TryGetValue(item.ID.ToString(), out JsonPriceObject1H? parsedPrices1H)) continue;
 
-            PriceObject? prices = parsedPrices?.ToPriceObject();
-            if(prices == null)
+            PriceObject? pricesLatest = parsedPricesLatest?.ToPriceObject();
+            if(pricesLatest == null)
             {
                 Logger.Warn($"Could not get latest prices for item '{item.Data.Name}'.");
                 continue;
             }
+
+            PriceObject1H? prices1H = parsedPrices1H.ToPriceObject(priceMapping1H.Timestamp);
+            if(prices1H == null)
+            {
+                Logger.Warn($"Could not get 1h prices for item '{item.Data.Name}'.");
+                continue;
+            }
             
-            if(item.UpdatePrices(prices))
+            if(item.UpdateLatestPrices(pricesLatest) || item.Update1HPrices(prices1H))
                 updatedItemsCount++;
         }
 
         if (updatedItemsCount > 0)
             hasUpdatedData = true;
-
-        Logger.Info($"Updated {updatedItemsCount} items' data.");
     }
 
-    private static void FindFlips()
+    private static List<Item> FindFlips()
     {
+        List<Item> results = new();
         int missingDataCount = 0;
         int anomalyCount = 0;
+        int onCooldownCount = 0;
 
         foreach (Item item in flippableItems)
         {
@@ -167,6 +222,9 @@ public static class Flipper
                 missingDataCount++;
                 continue;
             }
+
+            if (item.OnCooldown)
+                onCooldownCount++;
             
             if(!item.IsDataDirty) continue;
 
@@ -175,13 +233,14 @@ public static class Flipper
 
             Logger.Info($"ANOMALY -> Drop: {item.Data.Name}. %:{item.CalculateDeviationPercentage()} avg:{item.CalculateAverageLow()} lat:{item.LatestLow}");
 
-            item.IsDataDirty = false;
+            results.Add(item);
 
             anomalyCount++;
         }
 
-        Logger.Info($"Found {anomalyCount} anomalies.");
-        Logger.Info($"{missingDataCount} items do not have enough data to determine anomalies.");
+        Logger.Info($"Found {anomalyCount} anomalies.\t{onCooldownCount} items on cooldown.\t{updatedItemsCount} items updated.\t{missingDataCount} items insufficient data.");
+
+        return results;
     }
 
     private static async Task<string> QueryApiToJson(string address)
@@ -198,170 +257,4 @@ public static class Flipper
 
         return jsonString;
     }
-    
-    public class Item
-    {
-        public readonly ItemData Data;
-        
-        /// <summary>
-        /// Determines if this item has had it's data changed since the last time checked.
-        /// </summary>
-        public bool IsDataDirty { get; set; }
-        
-        public int ID => Data.Id;
-        public bool HasEnoughData => averagePricesQueue.Count == AVERAGE_ITEM_PRICES_MAX_LENGTH;
-
-        public long LatestLow => latestPrices.Low;
-
-        private long LatestDataUpdateTime { get; set; }
-        private PriceObject latestPrices;
-        private readonly Queue<PriceObject> averagePricesQueue;
-
-        public Item(ItemData data, PriceObject latestPrices)
-        {
-            averagePricesQueue = new Queue<PriceObject>(AVERAGE_ITEM_PRICES_MAX_LENGTH);
-            Data = data;
-            
-            UpdatePrices(latestPrices);
-        }
-
-        public bool IsFlippable()
-        {
-            if (latestPrices.Low < 500) return false;
-            if (latestPrices.High < 500) return false;
-            
-            //TODO: Add other checks.
-        
-            return true;
-        }
-
-        public bool UpdatePrices(PriceObject newLatestPrices)
-        {
-            if (newLatestPrices.LatestUpdateTime <= LatestDataUpdateTime)
-            {
-                return false;
-            }
-
-            if(averagePricesQueue.Count == AVERAGE_ITEM_PRICES_MAX_LENGTH)
-                averagePricesQueue.Dequeue();
-            
-            averagePricesQueue.Enqueue(latestPrices);
-
-            latestPrices = newLatestPrices;
-
-            LatestDataUpdateTime = newLatestPrices.LatestUpdateTime;
-            IsDataDirty = true;
-            
-            return true;
-        }
-
-        public bool GetAnomaly()
-        {
-            double deviationPercentage = CalculateDeviationPercentage();
-
-            return deviationPercentage > ANOMALY_DEVIATION_PERCENTAGE_MIN;
-        }
-
-        public double CalculateDeviationPercentage()
-        {
-            double latestLow = latestPrices.Low;
-            double averageLow = CalculateAverageLow();
-
-            return (averageLow - latestLow) / averageLow * 100.0;
-        }
-
-        public long CalculateAverageLow()
-        {
-            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-            long combinedLows = averagePricesQueue.Where(priceObject => priceObject != null).Sum(priceObject => priceObject.Low);
-
-            return combinedLows / averagePricesQueue.Count;
-        }
-    }
-    
-    public class PriceMapping
-    {
-        [JsonProperty("data")]
-        public Dictionary<string, JsonPriceObject?> Prices { get; set; }
-    }
-    
-    public class JsonPriceObject
-    {
-        [JsonProperty("high")]
-        public long? High { get; set; }
-
-        [JsonProperty("highTime")]
-        public long? HighTime { get; set; }
-
-        [JsonProperty("low")]
-        public long? Low { get; set; }
-
-        [JsonProperty("lowTime")]
-        public long? LowTime { get; set; }
-
-        public PriceObject? ToPriceObject()
-        {
-            if (High == null || HighTime == null || Low == null || LowTime == null)
-                return null;
-
-            PriceObject prices = new(
-                (long)High,
-                (long)HighTime,
-                (long)Low,
-                (long)LowTime);
-
-            return prices;
-        }
-    }
-
-    public class PriceObject
-    {
-        public readonly long High;
-
-        public readonly long HighTime;
-
-        public readonly long Low;
-
-        public readonly long LowTime;
-
-        public long LatestUpdateTime => Math.Max(HighTime, LowTime);
-
-        public PriceObject(long high, long highTime, long low, long lowTime)
-        {
-            High = high;
-            HighTime = highTime;
-            Low = low;
-            LowTime = lowTime;
-        }
-    }
-    
-    public class ItemData
-    {
-        [JsonProperty("examine")]
-        public string Examine { get; set; }
-
-        [JsonProperty("id")]
-        public int Id { get; set; }
-
-        [JsonProperty("members")]
-        public bool Members { get; set; }
-
-        [JsonProperty("lowalch")]
-        public int Lowalch { get; set; }
-
-        [JsonProperty("limit")]
-        public int Limit { get; set; }
-
-        [JsonProperty("value")]
-        public int Value { get; set; }
-
-        [JsonProperty("highalch")]
-        public int Highalch { get; set; }
-
-        [JsonProperty("icon")]
-        public string Icon { get; set; }
-
-        [JsonProperty("name")]
-        public string Name { get; set; }
-    }
-}
+}*/

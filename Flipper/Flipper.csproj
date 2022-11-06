@@ -9,6 +9,13 @@
 
     <ItemGroup>
       <PackageReference Include="Discord.Net" Version="3.8.1" />
+      <PackageReference Include="ScottPlot" Version="4.1.58" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="config.json">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 
 </Project>
