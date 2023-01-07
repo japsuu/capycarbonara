@@ -11,7 +11,7 @@ internal class Program
     /// Smaller value = less delay in fetching data.
     /// </summary>
     private const int API_UPDATE_SYNCHRONIZATION_INTERVAL = 4;
-    private const string BOT_TOKEN = "MTAzMzQyODE2MDQ1MDE1NDUzNg.Gkl11H.vivlOYY1-aJcaT4LCRuYy9Y7yg1OB-rIev5_2Q";
+    private const string BOT_TOKEN = "TOKEN HERE";
     private DiscordSocketClient client = null!;
     
     private static bool syncedWithApiUpdateCycle;
